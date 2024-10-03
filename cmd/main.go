@@ -137,6 +137,9 @@ func main() {
 			lowercaseHeaders[strings.ToLower(key)] = value
 		}
 
+		formattedString := fmt.Sprintf("- %s: %s", "Status Code", resp.Status)
+		fmt.Println(formattedString)
+
 		for _, header := range check_list {
 			if _, ok := lowercaseHeaders[strings.ToLower(header)]; !ok {
 				formattedString := fmt.Sprintf("- Missing %s", red(header))
