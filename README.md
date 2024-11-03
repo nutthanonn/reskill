@@ -8,6 +8,14 @@ Reskill is an automated tool designed to hunt for missing HTTP security headers 
 - Identifies insecure CSP configurations.
 - Utilizes a customizable wordlist for targeted scanning.
 
+## Example
+
+<img src='./assets/asset-1.png'>
+
+### from wordlist.txt:
+
+<img src='./assets/asset-2.png'>
+
 ## Installation
 
 To install Reskill, clone the repository and build the project using Go:

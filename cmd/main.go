@@ -61,6 +61,10 @@ func removeStatic(urls []string) []string {
 	extension := []string{".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".ico"}
 
 	for _, rawUrl := range urls {
+		if strings.ToLower(rawUrl[:4]) != "http" || strings.ToLower(rawUrl[:5]) != "https" {
+			rawUrl = "http://" + rawUrl
+		}
+
 		parsedUrl, err := url.Parse(rawUrl)
 		if err != nil {
 			continue
