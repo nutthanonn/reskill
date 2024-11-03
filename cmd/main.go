@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net/http"
@@ -114,8 +115,14 @@ func main() {
 
 	domains = removeStatic(domains)
 
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
 	for _, domain := range domains {
-		resp, err := http.Get(domain)
+		resp, err := client.Get(domain)
 		if err != nil {
 			utils.Error(err.Error())
 			continue
