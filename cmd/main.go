@@ -17,6 +17,17 @@ import (
 var red = color.New(color.FgRed).SprintFunc()
 var green = color.New(color.FgGreen).SprintFunc()
 
+type stringSlice []string
+
+func (s *stringSlice) String() string {
+	return strings.Join(*s, ", ")
+}
+
+func (s *stringSlice) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
 func checkMisconfigCSP(csp string) {
 	insecureDirectives := []string{
 		"unsafe-inline",
@@ -30,70 +41,49 @@ func checkMisconfigCSP(csp string) {
 			fmt.Println(formattedString)
 		}
 	}
+
+	fmt.Printf("- %s: %s\n", green("Content-Security-Policy"), csp)
 }
 
-func deduplicateUrls(urls []string) []string {
-	uniquePaths := make(map[string]bool)
-	var result []string
+func ensureScheme(domain string) string {
+	u, err := url.Parse(domain)
+	if err != nil || u.Scheme == "" {
+		return "https://" + domain
+	}
+	return domain
+}
 
-	for _, rawUrl := range urls {
-		parsedUrl, err := url.Parse(rawUrl)
-		if err != nil {
-			continue
-		}
-
-		// Build the base URL without the query parameters
-		baseUrl := fmt.Sprintf("%s://%s%s", parsedUrl.Scheme, parsedUrl.Host, parsedUrl.Path)
-
-		// Check if the base URL is already in the map
-		if _, exists := uniquePaths[baseUrl]; !exists {
-			uniquePaths[baseUrl] = true
-			result = append(result, baseUrl)
-		}
+func checkHeaders(resp *http.Response) {
+	checkList := []string{
+		"X-Frame-Options",
+		"Strict-Transport-Security",
+		"X-Content-Type-Options",
+		"X-XSS-Protection",
+		"Content-Security-Policy",
+		"Cache-Control",
+		"Pragma",
+		"Expires",
+		"Server",
 	}
 
-	return result
-}
+	lowercaseHeaders := make(map[string][]string)
+	for key, value := range resp.Header {
+		lowercaseHeaders[strings.ToLower(key)] = value
+	}
 
-func removeStatic(urls []string) []string {
-	uniquePaths := make(map[string]bool)
-	var result []string
-	extension := []string{".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".ico"}
+	fmt.Printf("- %s: %s\n", "Status Code", resp.Status)
 
-	for _, rawUrl := range urls {
-		if strings.ToLower(rawUrl[:4]) != "http" || strings.ToLower(rawUrl[:5]) != "https" {
-			rawUrl = "http://" + rawUrl
-		}
-
-		parsedUrl, err := url.Parse(rawUrl)
-		if err != nil {
-			continue
-		}
-
-		baseUrl := parsedUrl.Scheme + "://" + parsedUrl.Host + parsedUrl.Path
-		isStatic := false
-		for _, ext := range extension {
-			if strings.HasSuffix(baseUrl, ext) {
-				isStatic = true
-				break
+	for _, header := range checkList {
+		if _, ok := lowercaseHeaders[strings.ToLower(header)]; !ok {
+			fmt.Printf("- Missing %s\n", red(header))
+		} else {
+			if strings.ToLower(header) == "content-security-policy" {
+				checkMisconfigCSP(strings.Join(lowercaseHeaders[strings.ToLower(header)], ""))
+			} else {
+				fmt.Printf("- %s: %s\n", green(header), strings.Join(lowercaseHeaders[strings.ToLower(header)], " "))
 			}
 		}
-
-		if isStatic {
-			continue
-		}
-
-		if parsedUrl.RawQuery != "" {
-			baseUrl += "?" + parsedUrl.RawQuery
-		}
-
-		if _, exists := uniquePaths[baseUrl]; !exists {
-			uniquePaths[baseUrl] = true
-			result = append(result, baseUrl)
-		}
 	}
-
-	return result
 }
 
 func main() {
@@ -101,8 +91,9 @@ func main() {
 	utils.Information("This tool will check the security headers of the provided URLs")
 
 	var domains []string
-	var urlDedupe bool
-	flag.BoolVar(&urlDedupe, "dedupe", false, "Deduplicate URLs")
+	var customHeaders stringSlice
+
+	flag.Var(&customHeaders, "H", "Add a custom header to the request (e.g., -H \"User-Agent: MyAgent\"). Can be used multiple times.")
 	flag.Parse()
 
 	sc := bufio.NewScanner(os.Stdin)
@@ -111,13 +102,8 @@ func main() {
 	}
 	if err := sc.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read input: %s\n", err)
+		return
 	}
-
-	if urlDedupe {
-		domains = deduplicateUrls(domains)
-	}
-
-	domains = removeStatic(domains)
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -126,45 +112,34 @@ func main() {
 	}
 
 	for _, domain := range domains {
-		resp, err := client.Get(domain)
+		domainWithScheme := ensureScheme(domain)
+
+		req, err := http.NewRequest("GET", domainWithScheme, nil)
 		if err != nil {
-			utils.Error(err.Error())
+			utils.Error(fmt.Sprintf("Failed to create request for %s: %s", domainWithScheme, err.Error()))
+			continue
+		}
+
+		for _, header := range customHeaders {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) == 2 {
+				req.Header.Set(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+			} else {
+				utils.Error(fmt.Sprintf("Invalid header format: %s. Expected Key:Value", header))
+				continue
+			}
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			utils.Error(fmt.Sprintf("Failed to fetch %s: %s", domainWithScheme, err.Error()))
 			continue
 		}
 
 		defer resp.Body.Close()
-		utils.Success(domain)
+		utils.Success(domainWithScheme)
 
-		check_list := []string{
-			"X-Frame-Options",
-			"Strict-Transport-Security",
-			"X-Content-Type-Options",
-			"X-XSS-Protection",
-			"Content-Security-Policy",
-		}
-
-		lowercaseHeaders := make(map[string][]string)
-		for key, value := range resp.Header {
-			lowercaseHeaders[strings.ToLower(key)] = value
-		}
-
-		formattedString := fmt.Sprintf("- %s: %s", "Status Code", resp.Status)
-		fmt.Println(formattedString)
-
-		for _, header := range check_list {
-			if _, ok := lowercaseHeaders[strings.ToLower(header)]; !ok {
-				formattedString := fmt.Sprintf("- Missing %s", red(header))
-				fmt.Println(formattedString)
-
-			} else {
-				if header == "Content-Security-Policy" {
-					checkMisconfigCSP(strings.Join(lowercaseHeaders[strings.ToLower(header)], ""))
-				} else {
-					formattedString := fmt.Sprintf("- %s: %s", green(header), strings.Join(lowercaseHeaders[strings.ToLower(header)], " "))
-					fmt.Println(formattedString)
-				}
-			}
-		}
+		checkHeaders(resp)
 		fmt.Println("--------------------------------------------------------------")
 
 	}
